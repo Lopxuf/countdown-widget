@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minimal Weather</title>
+  <!-- 引入 Phosphor 图标库 -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <style>
+    :root {
+      --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --glass-bg: rgba(255, 255, 255, 0.25);
+      --glass-border: rgba(255, 255, 255, 0.3);
+      --text-color: #ffffff;
+    }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: transparent; /* 适配 Notion/Obsidian */
+      overflow: hidden;
+    }
+
+    /* 天气卡片主体 */
+    .weather-card {
+      position: relative;
+      width: 280px;
+      padding: 25px;
+      border-radius: 24px;
+      background: var(--bg-gradient); /* 默认背景，稍后会根据天气改变 */
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+      color: var(--text-color);
+      text-align: center;
+      transition: transform 0.3s ease;
+    }
+
+    /* 极简模式（用于小尺寸嵌入） */
+    body.minimal .weather-card {
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      background: transparent;
+      box-shadow: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    
+    body.minimal .temp { font-size: 42px; margin: 5px 0; }
+    body.minimal .icon-box i { font-size: 48px; }
+
+    .location {
+      font-size: 16px;
+      font-weight: 500;
+      opacity: 0.9;
+      margin-bottom: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .icon-box {
+      margin: 15px 0;
+    }
+    .icon-box i {
+      font-size: 64px;
+      filter: drop-shadow(0 4px 6px rgba(0,0,0,0.1));
+    }
+
+    .temp {
+      font-size: 56px;
+      font-weight: 700;
+      margin: 0;
+      letter-spacing: -2px;
+      line-height: 1;
+    }
+
+    .condition {
+      font-size: 14px;
+      margin-top: 8px;
+      opacity: 0.8;
+      font-weight: 400;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .loading {
+      font-size: 14px;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0% { opacity: 0.6; }
+      50% { opacity: 1; }
+      100% { opacity: 0.6; }
+    }
+
+    /* 针对不同天气的背景色（可选） */
+    .bg-sunny { background: linear-gradient(135deg, #f6d365 0%, #fda085 100%); }
+    .bg-cloudy { background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%); }
+    .bg-rain { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    .bg-snow { background: linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%); }
+
+  </style>
+</head>
+<body>
+
+  <div class="weather-card" id="card">
+    <div class="location" id="location"><i class="ph-fill ph-map-pin"></i> <span id="city-name">Locating...</span></div>
+    <div class="icon-box" id="icon"></div>
+    <div class="temp" id="temp">--°</div>
+    <div class="condition" id="condition" class="loading">Loading...</div>
+  </div>
+
+<script>
+  // --- 配置 ---
+  // 如果 URL 里没传 city，默认显示的城市
+  const DEFAULT_CITY = "Shanghai"; 
+
+  const params = new URLSearchParams(window.location.search);
+  const cityParam = params.get('city') || DEFAULT_CITY;
+  // 如果URL有 minimal=true，开启极简模式（去背景，适合纯文字嵌入）
+  if(params.get('minimal')) document.body.classList.add('minimal');
+
+  const card = document.getElementById('card');
+  const cityEl = document.getElementById('city-name');
+  const tempEl = document.getElementById('temp');
+  const condEl = document.getElementById('condition');
+  const iconEl = document.getElementById('icon');
+
+  // WMO 天气代码映射 (Open-Meteo 标准)
+  const weatherMap = {
+    0: { label: '晴朗', icon: 'ph-sun', bg: 'bg-sunny' },
+    1: { label: '多云', icon: 'ph-cloud-sun', bg: 'bg-cloudy' },
+    2: { label: '多云', icon: 'ph-cloud', bg: 'bg-cloudy' },
+    3: { label: '阴', icon: 'ph-cloud', bg: 'bg-cloudy' },
+    45: { label: '雾', icon: 'ph-cloud-fog', bg: 'bg-cloudy' },
+    48: { label: '雾凇', icon: 'ph-cloud-fog', bg: 'bg-cloudy' },
+    51: { label: '毛毛雨', icon: 'ph-cloud-rain', bg: 'bg-rain' },
+    53: { label: '小雨', icon: 'ph-cloud-rain', bg: 'bg-rain' },
+    55: { label: '中雨', icon: 'ph-cloud-rain', bg: 'bg-rain' },
+    61: { label: '小雨', icon: 'ph-cloud-rain', bg: 'bg-rain' },
+    63: { label: '中雨', icon: 'ph-cloud-rain', bg: 'bg-rain' },
+    65: { label: '大雨', icon: 'ph-cloud-rain', bg: 'bg-rain' },
+    80: { label: '阵雨', icon: 'ph-cloud-rain', bg: 'bg-rain' },
+    71: { label: '小雪', icon: 'ph-snowflake', bg: 'bg-snow' },
+    73: { label: '中雪', icon: 'ph-snowflake', bg: 'bg-snow' },
+    75: { label: '大雪', icon: 'ph-snowflake', bg: 'bg-snow' },
+    95: { label: '雷雨', icon: 'ph-cloud-lightning', bg: 'bg-rain' },
+  };
+
+  async function getWeather() {
+    try {
+      // 1. 先用 Geocoding API 找经纬度
+      const geoRes = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${cityParam}&count=1&language=zh&format=json`);
+      const geoData = await geoRes.json();
+
+      if (!geoData.results || geoData.results.length === 0) {
+        cityEl.innerText = "未找到城市";
+        condEl.innerText = "Error";
+        return;
+      }
+
+      const { latitude, longitude, name } = geoData.results[0];
+      cityEl.innerText = name; // 显示 API 返回的标准城市名
+
+      // 2. 用经纬度查天气
+      const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code&timezone=auto`);
+      const weatherData = await weatherRes.json();
+      
+      const current = weatherData.current;
+      const code = current.weather_code;
+      const info = weatherMap[code] || { label: '未知', icon: 'ph-question', bg: 'bg-cloudy' };
+
+      // 更新 UI
+      tempEl.innerText = Math.round(current.temperature_2m) + "°";
+      condEl.innerText = info.label;
+      iconEl.innerHTML = `<i class="ph-fill ${info.icon}"></i>`;
+      
+      // 移除旧背景，添加新背景
+      card.classList.remove('bg-sunny', 'bg-cloudy', 'bg-rain', 'bg-snow');
+      // 只有在非极简模式下才改变背景色
+      if (!document.body.classList.contains('minimal')) {
+        card.classList.add(info.bg);
+      } else {
+        // 极简模式下文字设为深色或跟随主题，这里简单处理设为黑色或自定义
+        card.style.color = "#333"; 
+      }
+
+    } catch (e) {
+      console.error(e);
+      cityEl.innerText = "网络错误";
+    }
+  }
+
+  getWeather();
+</script>
+</body>
+</html>
